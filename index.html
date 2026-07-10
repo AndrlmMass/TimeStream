@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0e1117">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="TimeStream">
+<title>TimeStream</title>
+<style>
+  :root {
+    --bg: #0e1117;
+    --panel: #161b22;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #4f9dff;
+    --work: #4f9dff;
+    --break: #3fb950;
+    --danger: #f85149;
+    --ring-track: #21262d;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    user-select: none;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding: 24px;
+    gap: 28px;
+  }
+  .brand {
+    position: fixed;
+    top: env(safe-area-inset-top, 18px);
+    left: 0; right: 0;
+    text-align: center;
+    font-size: 14px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .phase {
+    font-size: 15px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--muted);
+    transition: color .3s;
+  }
+  .phase.working { color: var(--work); }
+  .phase.break   { color: var(--break); }
+
+  .dial {
+    position: relative;
+    width: min(78vw, 320px);
+    aspect-ratio: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .dial svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+  .dial .track { fill: none; stroke: var(--ring-track); stroke-width: 8; }
+  .dial .prog  { fill: none; stroke: var(--accent); stroke-width: 8; stroke-linecap: round;
+                 transition: stroke-dashoffset .3s linear, stroke .3s; }
+
+  .readout { text-align: center; z-index: 1; }
+  .time {
+    font-size: clamp(38px, 12vw, 64px);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 1px;
+  }
+  .sub { font-size: 13px; color: var(--muted); margin-top: 6px; min-height: 18px; }
+
+  .controls { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
+  button {
+    font: inherit;
+    font-weight: 600;
+    font-size: 16px;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid #2a3038;
+    border-radius: 14px;
+    padding: 14px 26px;
+    cursor: pointer;
+    transition: transform .08s, background .2s, border-color .2s, opacity .2s;
+    min-width: 120px;
+  }
+  button:hover { border-color: #3a424d; }
+  button:active { transform: scale(.96); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #06121f; }
+  button.break   { background: var(--break); border-color: var(--break); color: #06210f; }
+  button.ghost   { background: transparent; }
+  button:disabled { opacity: .35; cursor: default; }
+  button[hidden] { display: none; }
+
+  .settings {
+    position: fixed;
+    bottom: env(safe-area-inset-bottom, 20px);
+    left: 0; right: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .settings input {
+    width: 52px;
+    font: inherit;
+    text-align: center;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid #2a3038;
+    border-radius: 8px;
+    padding: 6px;
+  }
+</style>
+</head>
+<body>
+  <div class="brand">TimeStream</div>
+
+  <div class="phase" id="phase">Ready</div>
+
+  <div class="dial">
+    <svg viewBox="0 0 100 100">
+      <circle class="track" cx="50" cy="50" r="45"></circle>
+      <circle class="prog"  cx="50" cy="50" r="45"
+              stroke-dasharray="282.74" stroke-dashoffset="282.74" id="prog"></circle>
+    </svg>
+    <div class="readout">
+      <div class="time" id="time">00:00</div>
+      <div class="sub" id="sub">Press Start to begin working</div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="primary" id="startBtn">Start</button>
+    <button class="break"   id="stopBtn"  hidden>Take Break</button>
+    <button class="ghost"   id="skipBtn"  hidden>Skip Break</button>
+    <button class="ghost"   id="resetBtn" hidden>Reset</button>
+  </div>
+
+  <div class="settings">
+    <span>Break = work ÷</span>
+    <input type="number" id="divisor" value="5" min="1" max="60" step="1">
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  const CIRC = 2 * Math.PI * 45; // dial circumference
+
+  const el = {
+    phase:  document.getElementById("phase"),
+    time:   document.getElementById("time"),
+    sub:    document.getElementById("sub"),
+    prog:   document.getElementById("prog"),
+    start:  document.getElementById("startBtn"),
+    stop:   document.getElementById("stopBtn"),
+    skip:   document.getElementById("skipBtn"),
+    reset:  document.getElementById("resetBtn"),
+    divisor:document.getElementById("divisor"),
+  };
+
+  // state: "idle" | "working" | "break"
+  let state = "idle";
+  let anchor = 0;        // timestamp work started (ms)
+  let workedMs = 0;      // frozen worked duration when a break starts
+  let breakEndsAt = 0;   // timestamp break ends (ms)
+  let ticker = null;
+
+  const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+  function fmt(ms) {
+    const t = Math.max(0, Math.round(ms / 1000));
+    const h = Math.floor(t / 3600);
+    const m = Math.floor((t % 3600) / 60);
+    const s = t % 60;
+    const pad = (n) => String(n).padStart(2, "0");
+    return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+  }
+
+  function setRing(fraction, color) {
+    const f = Math.max(0, Math.min(1, fraction));
+    el.prog.style.strokeDashoffset = String(CIRC * (1 - f));
+    el.prog.style.stroke = color;
+  }
+
+  function getDivisor() {
+    const v = parseInt(el.divisor.value, 10);
+    return (isNaN(v) || v < 1) ? 5 : v;
+  }
+
+  function render() {
+    if (state === "working") {
+      const elapsed = Date.now() - anchor;
+      el.time.textContent = fmt(elapsed);
+      const earned = elapsed / getDivisor();
+      el.sub.textContent = "Break earned so far: " + fmt(earned);
+      // Ring fills gradually over each 25-min block, purely cosmetic pacing.
+      setRing((elapsed % (25 * 60000)) / (25 * 60000), cssVar("--work"));
+    } else if (state === "break") {
+      const remaining = breakEndsAt - Date.now();
+      if (remaining <= 0) { finishBreak(); return; }
+      el.time.textContent = fmt(remaining);
+      const total = workedMs / getDivisor();
+      el.sub.textContent = "Break time — relax";
+      setRing(total > 0 ? remaining / total : 0, cssVar("--break"));
+    }
+  }
+
+  function startTicker() {
+    stopTicker();
+    render();
+    ticker = setInterval(render, 250);
+  }
+  function stopTicker() { if (ticker) { clearInterval(ticker); ticker = null; } }
+
+  function startWork() {
+    state = "working";
+    anchor = Date.now();
+    el.phase.textContent = "Working";
+    el.phase.className = "phase working";
+    el.start.hidden = true;
+    el.stop.hidden = false;
+    el.skip.hidden = true;
+    el.reset.hidden = false;
+    el.divisor.disabled = true;
+    startTicker();
+  }
+
+  function takeBreak() {
+    workedMs = Date.now() - anchor;
+    const breakMs = workedMs / getDivisor();
+    if (breakMs < 1000) { // too little worked to warrant a break
+      reset();
+      return;
+    }
+    state = "break";
+    breakEndsAt = Date.now() + breakMs;
+    el.phase.textContent = "Break";
+    el.phase.className = "phase break";
+    el.stop.hidden = true;
+    el.skip.hidden = false;
+    el.reset.hidden = false;
+    el.start.hidden = true;
+    startTicker();
+  }
+
+  function finishBreak() {
+    stopTicker();
+    setRing(0, cssVar("--break"));
+    el.time.textContent = "00:00";
+    el.phase.textContent = "Break over";
+    el.phase.className = "phase";
+    el.sub.textContent = "Ready for the next stream";
+    el.skip.hidden = true;
+    el.stop.hidden = true;
+    el.reset.hidden = true;
+    el.start.hidden = false;
+    el.start.textContent = "Start";
+    el.divisor.disabled = false;
+    state = "idle";
+    notify();
+  }
+
+  function reset() {
+    stopTicker();
+    state = "idle";
+    el.phase.textContent = "Ready";
+    el.phase.className = "phase";
+    el.time.textContent = "00:00";
+    el.sub.textContent = "Press Start to begin working";
+    setRing(0, cssVar("--work"));
+    el.start.hidden = false;
+    el.start.textContent = "Start";
+    el.stop.hidden = true;
+    el.skip.hidden = true;
+    el.reset.hidden = true;
+    el.divisor.disabled = false;
+  }
+
+  // --- Alert when break ends ---
+  function notify() {
+    beep();
+    if ("Notification" in window && Notification.permission === "granted") {
+      new Notification("TimeStream", { body: "Break's over — back to it." });
+    }
+    document.title = "▶ Break over — TimeStream";
+    setTimeout(() => { document.title = "TimeStream"; }, 8000);
+  }
+
+  function beep() {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      const ctx = new Ctx();
+      const notes = [660, 880, 990];
+      notes.forEach((freq, i) => {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = "sine";
+        o.frequency.value = freq;
+        o.connect(g); g.connect(ctx.destination);
+        const t = ctx.currentTime + i * 0.18;
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.25, t + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+        o.start(t); o.stop(t + 0.18);
+      });
+    } catch (e) { /* audio not available */ }
+  }
+
+  // --- Wire up ---
+  el.start.addEventListener("click", () => {
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+    startWork();
+  });
+  el.stop.addEventListener("click", takeBreak);
+  el.skip.addEventListener("click", reset);
+  el.reset.addEventListener("click", reset);
+
+  // Keyboard: space toggles start/break/skip
+  document.addEventListener("keydown", (e) => {
+    if (e.code === "Space" && e.target.tagName !== "INPUT") {
+      e.preventDefault();
+      if (state === "idle") startWork();
+      else if (state === "working") takeBreak();
+      else if (state === "break") reset();
+    }
+  });
+
+  reset();
+
+  // Register service worker for offline + installability (no-op on file://).
+  if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+})();
+</script>
+</body>
+</html>
