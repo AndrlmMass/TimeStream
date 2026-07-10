@@ -183,6 +183,20 @@
   let breakEndsAt = 0;   // timestamp break ends (ms)
   let ticker = null;
 
+  // --- Persistence: survive iframe reloads (e.g. Notion unloading the page) ---
+  const STORE = "timestream.state.v1";
+  function save() {
+    try {
+      localStorage.setItem(STORE, JSON.stringify({
+        state, anchor, workedMs, breakEndsAt, divisor: getDivisor()
+      }));
+    } catch (e) { /* storage unavailable (e.g. blocked third-party storage) */ }
+  }
+  function load() {
+    try { return JSON.parse(localStorage.getItem(STORE) || "null"); }
+    catch (e) { return null; }
+  }
+
   const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
   function fmt(ms) {
@@ -230,9 +244,8 @@
   }
   function stopTicker() { if (ticker) { clearInterval(ticker); ticker = null; } }
 
-  function startWork() {
+  function enterWorking() {
     state = "working";
-    anchor = Date.now();
     el.phase.textContent = "Working";
     el.phase.className = "phase working";
     el.start.hidden = true;
@@ -243,15 +256,14 @@
     startTicker();
   }
 
-  function takeBreak() {
-    workedMs = Date.now() - anchor;
-    const breakMs = workedMs / getDivisor();
-    if (breakMs < 1000) { // too little worked to warrant a break
-      reset();
-      return;
-    }
+  function startWork() {
+    anchor = Date.now();
+    enterWorking();
+    save();
+  }
+
+  function enterBreak() {
     state = "break";
-    breakEndsAt = Date.now() + breakMs;
     el.phase.textContent = "Break";
     el.phase.className = "phase break";
     el.stop.hidden = true;
@@ -261,7 +273,19 @@
     startTicker();
   }
 
-  function finishBreak() {
+  function takeBreak() {
+    workedMs = Date.now() - anchor;
+    const breakMs = workedMs / getDivisor();
+    if (breakMs < 1000) { // too little worked to warrant a break
+      reset();
+      return;
+    }
+    breakEndsAt = Date.now() + breakMs;
+    enterBreak();
+    save();
+  }
+
+  function finishBreak(silent) {
     stopTicker();
     setRing(0, cssVar("--break"));
     el.time.textContent = "00:00";
@@ -275,7 +299,8 @@
     el.start.textContent = "Start";
     el.divisor.disabled = false;
     state = "idle";
-    notify();
+    save();
+    if (!silent) notify();
   }
 
   function reset() {
@@ -292,6 +317,32 @@
     el.skip.hidden = true;
     el.reset.hidden = true;
     el.divisor.disabled = false;
+    save();
+  }
+
+  // Restore state after a reload (e.g. Notion re-mounting the iframe).
+  function restore() {
+    const s = load();
+    if (s && s.divisor) el.divisor.value = s.divisor;
+    if (!s || s.state === "idle") { reset(); return; }
+
+    if (s.state === "working") {
+      anchor = s.anchor;
+      enterWorking();
+      return;
+    }
+    if (s.state === "break") {
+      workedMs = s.workedMs;
+      breakEndsAt = s.breakEndsAt;
+      if (Date.now() >= breakEndsAt) {
+        // Break already elapsed while the page was gone — no late chime.
+        finishBreak(true);
+      } else {
+        enterBreak();
+      }
+      return;
+    }
+    reset();
   }
 
   // --- Alert when break ends ---
@@ -345,7 +396,9 @@
     }
   });
 
-  reset();
+  el.divisor.addEventListener("change", save);
+
+  restore();
 
   // Register service worker for offline + installability (no-op on file://).
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
