@@ -4,9 +4,12 @@ A dead-simple **flowtime** timer: you work as long as you're in flow, then take 
 break equal to your work time divided by 5 (adjustable).
 
 - **Work** counts up. The break you've earned is shown live.
+- **Pause** freezes the work clock for short interruptions (bathroom, a knock at the
+  door) — that time earns no break and isn't counted as work. **Resume** picks up
+  exactly where you left off.
 - **Take Break** freezes the worked time and counts down `work ÷ divisor`.
 - A chime + notification fire when the break ends.
-- Spacebar cycles the phases.
+- Spacebar cycles the phases; **P** pauses and resumes.
 
 ## Run it
 

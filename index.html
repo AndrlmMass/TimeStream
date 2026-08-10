@@ -61,6 +61,7 @@
   }
   .phase.working { color: var(--work); }
   .phase.break   { color: var(--break); }
+  .phase.paused  { color: var(--muted); }
 
   .dial {
     position: relative;
@@ -148,6 +149,8 @@
 
   <div class="controls">
     <button class="primary" id="startBtn">Start</button>
+    <button class="ghost"   id="pauseBtn"  hidden>Pause</button>
+    <button class="primary" id="resumeBtn" hidden>Resume</button>
     <button class="break"   id="stopBtn"  hidden>Take Break</button>
     <button class="ghost"   id="skipBtn"  hidden>Skip Break</button>
     <button class="ghost"   id="resetBtn" hidden>Reset</button>
@@ -170,16 +173,19 @@
     sub:    document.getElementById("sub"),
     prog:   document.getElementById("prog"),
     start:  document.getElementById("startBtn"),
+    pause:  document.getElementById("pauseBtn"),
+    resume: document.getElementById("resumeBtn"),
     stop:   document.getElementById("stopBtn"),
     skip:   document.getElementById("skipBtn"),
     reset:  document.getElementById("resetBtn"),
     divisor:document.getElementById("divisor"),
   };
 
-  // state: "idle" | "working" | "break"
+  // state: "idle" | "working" | "paused" | "break"
   let state = "idle";
   let anchor = 0;        // timestamp work started (ms)
   let workedMs = 0;      // frozen worked duration when a break starts
+  let pausedMs = 0;      // worked duration at the moment of pausing
   let breakEndsAt = 0;   // timestamp break ends (ms)
   let ticker = null;
 
@@ -188,7 +194,7 @@
   function save() {
     try {
       localStorage.setItem(STORE, JSON.stringify({
-        state, anchor, workedMs, breakEndsAt, divisor: getDivisor()
+        state, anchor, workedMs, pausedMs, breakEndsAt, divisor: getDivisor()
       }));
     } catch (e) { /* storage unavailable (e.g. blocked third-party storage) */ }
   }
@@ -219,14 +225,20 @@
     return (isNaN(v) || v < 1) ? 5 : v;
   }
 
+  // Worked time so far — paused stretches don't count.
+  function workedSoFar() {
+    return state === "paused" ? pausedMs : Date.now() - anchor;
+  }
+
   function render() {
-    if (state === "working") {
-      const elapsed = Date.now() - anchor;
+    if (state === "working" || state === "paused") {
+      const elapsed = workedSoFar();
       el.time.textContent = fmt(elapsed);
       const earned = elapsed / getDivisor();
-      el.sub.textContent = "Break earned so far: " + fmt(earned);
+      el.sub.textContent = (state === "paused" ? "Paused — break earned: " : "Break earned so far: ") + fmt(earned);
       // Ring fills gradually over each 25-min block, purely cosmetic pacing.
-      setRing((elapsed % (25 * 60000)) / (25 * 60000), cssVar("--work"));
+      setRing((elapsed % (25 * 60000)) / (25 * 60000),
+              cssVar(state === "paused" ? "--muted" : "--work"));
     } else if (state === "break") {
       const remaining = breakEndsAt - Date.now();
       if (remaining <= 0) { finishBreak(); return; }
@@ -249,6 +261,8 @@
     el.phase.textContent = "Working";
     el.phase.className = "phase working";
     el.start.hidden = true;
+    el.pause.hidden = false;
+    el.resume.hidden = true;
     el.stop.hidden = false;
     el.skip.hidden = true;
     el.reset.hidden = false;
@@ -262,11 +276,42 @@
     save();
   }
 
+  function enterPaused() {
+    state = "paused";
+    el.phase.textContent = "Paused";
+    el.phase.className = "phase paused";
+    el.start.hidden = true;
+    el.pause.hidden = true;
+    el.resume.hidden = false;
+    el.stop.hidden = false;
+    el.skip.hidden = true;
+    el.reset.hidden = false;
+    el.divisor.disabled = true;
+    stopTicker();
+    render();
+  }
+
+  // Pause freezes the work clock without earning break time — for stepping
+  // away briefly (bathroom, a knock at the door) rather than taking a break.
+  function pauseWork() {
+    pausedMs = Date.now() - anchor;
+    enterPaused();
+    save();
+  }
+
+  function resumeWork() {
+    anchor = Date.now() - pausedMs;
+    enterWorking();
+    save();
+  }
+
   function enterBreak() {
     state = "break";
     el.phase.textContent = "Break";
     el.phase.className = "phase break";
     el.stop.hidden = true;
+    el.pause.hidden = true;
+    el.resume.hidden = true;
     el.skip.hidden = false;
     el.reset.hidden = false;
     el.start.hidden = true;
@@ -274,7 +319,7 @@
   }
 
   function takeBreak() {
-    workedMs = Date.now() - anchor;
+    workedMs = workedSoFar();
     const breakMs = workedMs / getDivisor();
     if (breakMs < 1000) { // too little worked to warrant a break
       reset();
@@ -294,6 +339,8 @@
     el.sub.textContent = "Ready for the next stream";
     el.skip.hidden = true;
     el.stop.hidden = true;
+    el.pause.hidden = true;
+    el.resume.hidden = true;
     el.reset.hidden = true;
     el.start.hidden = false;
     el.start.textContent = "Start";
@@ -313,6 +360,8 @@
     setRing(0, cssVar("--work"));
     el.start.hidden = false;
     el.start.textContent = "Start";
+    el.pause.hidden = true;
+    el.resume.hidden = true;
     el.stop.hidden = true;
     el.skip.hidden = true;
     el.reset.hidden = true;
@@ -329,6 +378,13 @@
     if (s.state === "working") {
       anchor = s.anchor;
       enterWorking();
+      return;
+    }
+    if (s.state === "paused") {
+      // Stay paused across a reload — time away from the page isn't work.
+      pausedMs = s.pausedMs || 0;
+      anchor = Date.now() - pausedMs;
+      enterPaused();
       return;
     }
     if (s.state === "break") {
@@ -382,17 +438,25 @@
     }
     startWork();
   });
+  el.pause.addEventListener("click", pauseWork);
+  el.resume.addEventListener("click", resumeWork);
   el.stop.addEventListener("click", takeBreak);
   el.skip.addEventListener("click", reset);
   el.reset.addEventListener("click", reset);
 
-  // Keyboard: space toggles start/break/skip
+  // Keyboard: space toggles start/break/skip, P pauses and resumes
   document.addEventListener("keydown", (e) => {
-    if (e.code === "Space" && e.target.tagName !== "INPUT") {
+    if (e.target.tagName === "INPUT") return;
+    if (e.code === "Space") {
       e.preventDefault();
       if (state === "idle") startWork();
       else if (state === "working") takeBreak();
+      else if (state === "paused") resumeWork();
       else if (state === "break") reset();
+    } else if (e.code === "KeyP") {
+      e.preventDefault();
+      if (state === "working") pauseWork();
+      else if (state === "paused") resumeWork();
     }
   });
 
